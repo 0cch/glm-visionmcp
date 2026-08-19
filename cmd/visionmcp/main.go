@@ -52,7 +52,7 @@ func main() {
 		os.Exit(2)
 	}
 	defer closeLogger()
-	lockPath, err := singleinstance.LockPath()
+	lockPath, err := singleinstance.LockPathWith(cfg.LockPath, os.Getenv)
 	if err != nil {
 		logger.ErrorFields("failed to determine lock path", map[string]any{"error": err.Error()})
 		fmt.Fprintf(os.Stderr, "visionmcp: %v\n", err)
@@ -114,5 +114,6 @@ func generateConfig(cfg config.Config) string {
 		Model:         cfg.Model,
 		Retries:       cfg.Retries,
 		RetryInterval: cfg.RetryInterval,
+		LockPath:      cfg.LockPath,
 	})
 }

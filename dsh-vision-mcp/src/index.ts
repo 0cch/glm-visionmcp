@@ -469,14 +469,17 @@ export class VisionMcpClient {
     const command = resolveCommand(config)
     const childEnv = resolveChildEnv(config)
 
+    const args = [
+      '--model', config.model,
+      '--retries', String(config.retries),
+      '--retry-interval', config.retryInterval,
+      '--log-level', 'info',
+    ]
+    const lockOverride = config.lockPath?.trim()
+    if (lockOverride) args.push('--lock-path', lockOverride)
     this.transport = new StdioClientTransport({
       command,
-      args: [
-        '--model', config.model,
-        '--retries', String(config.retries),
-        '--retry-interval', config.retryInterval,
-        '--log-level', 'info',
-      ],
+      args,
       env: childEnv,
       ...this.cwd ? { cwd: this.cwd } : {},
     })
@@ -508,8 +511,9 @@ function requireNodePathJoin(...parts: string[]): string {
 }
 
 /**
- * Ambient env for the visionmcp child. The lock path follows the override
- * chain: `config.lockPath` > existing `VISIONMCP_LOCK_PATH` > default
+ * Ambient env for the visionmcp child. When `config.lockPath` is set the
+ * lock path is passed as `--lock-path` (see connect()); otherwise it
+ * falls back to an existing `VISIONMCP_LOCK_PATH` env or the default
  * `<DSH_HOME>/visionmcp-bridge.lock`.
  */
 function resolveChildEnv(config: Config): Record<string, string> {
@@ -520,6 +524,8 @@ function resolveChildEnv(config: Config): Record<string, string> {
   }
   const explicit = config.lockPath?.trim()
   if (explicit) {
+    // visionmcp prefers --lock-path over the env var; keep env in sync for
+    // older visionmcp builds that only read the env var.
     env.VISIONMCP_LOCK_PATH = explicit
   } else if (!env.VISIONMCP_LOCK_PATH) {
     const dshHome = process.env.DSH_HOME

@@ -33,10 +33,28 @@ func TestGenerateCodexConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestGenerateCodexConfigLockPath(t *testing.T) {
+	got := GenerateCodexConfig(CodexConfigOptions{
+		ServerName: "vision",
+		Executable: `D:\Tools\visionmcp\visionmcp.exe`,
+		LogPath:    `D:\Logs\visionmcp.log`,
+		Model:      "glm-4.6v-flash",
+		LockPath:   `C:\locks\visionmcp.lock`,
+	})
+	if !strings.Contains(got, `"--lock-path", "C:\\locks\\visionmcp.lock"`) {
+		t.Fatalf("config missing lock-path arg: %s", got)
+	}
+}
+
 func TestGenerateCodexCLICommand(t *testing.T) {
 	got := GenerateCodexCLICommand(CodexConfigOptions{ServerName: "vision", Executable: `D:\Tools\visionmcp\visionmcp.exe`})
 	want := `codex mcp add vision --env GLM_API_KEY -- D:\Tools\visionmcp\visionmcp.exe`
 	if got != want {
 		t.Fatalf("GenerateCodexCLICommand() = %s, want %s", got, want)
+	}
+	gotLock := GenerateCodexCLICommand(CodexConfigOptions{ServerName: "vision", Executable: `D:\Tools\visionmcp\visionmcp.exe`, LockPath: `C:\locks\visionmcp.lock`})
+	wantLock := `codex mcp add vision --env GLM_API_KEY -- D:\Tools\visionmcp\visionmcp.exe --lock-path C:\locks\visionmcp.lock`
+	if gotLock != wantLock {
+		t.Fatalf("GenerateCodexCLICommand() lock = %s, want %s", gotLock, wantLock)
 	}
 }

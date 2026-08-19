@@ -77,3 +77,5 @@ Only one `visionmcp` process is allowed per user. The server uses an OS-level ex
 
 If another instance is already running, the new process exits with code `3`. The lock is released automatically when the owning process exits. `VISIONMCP_LOCK_PATH` can override the lock location for testing.
 
+The lock location can be overridden (in priority order) by `--lock-path` (CLI), then `VISIONMCP_LOCK_PATH` (environment), then the per-user cache default. This lets several independent MCP consumers each run their own visionmcp instance without colliding.
+

@@ -101,3 +101,21 @@ func TestParseDryRunWithoutAPIKey(t *testing.T) {
 		t.Fatal("expected dry-run to be enabled")
 	}
 }
+
+func TestParseLockPathFlag(t *testing.T) {
+	cfg, err := Parse([]string{"--lock-path", "C:\\locks\\custom.lock"}, func(string) string { return "key" })
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.LockPath != "C:\\locks\\custom.lock" {
+		t.Fatalf("LockPath = %q", cfg.LockPath)
+	}
+	// default: empty
+	cfg, err = Parse(nil, func(string) string { return "key" })
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.LockPath != "" {
+		t.Fatalf("expected empty LockPath, got %q", cfg.LockPath)
+	}
+}

@@ -17,6 +17,7 @@ type CodexConfigOptions struct {
 	Model         string
 	Retries       int
 	RetryInterval time.Duration
+	LockPath      string
 }
 
 func GenerateCodexConfig(options CodexConfigOptions) string {
@@ -55,11 +56,26 @@ func GenerateCodexConfig(options CodexConfigOptions) string {
 	if retryInterval == 0 {
 		retryInterval = time.Second
 	}
+	args := []string{
+		fmt.Sprintf("%q", "--model"),
+		fmt.Sprintf("%q", model),
+		fmt.Sprintf("%q", "--retries"),
+		fmt.Sprintf("%d", retries),
+		fmt.Sprintf("%q", "--retry-interval"),
+		fmt.Sprintf("%q", retryInterval.String()),
+		fmt.Sprintf("%q", "--log"),
+		fmt.Sprintf("%q", logPath),
+		fmt.Sprintf("%q", "--log-level"),
+		fmt.Sprintf("%q", logLevel),
+	}
+	if options.LockPath != "" {
+		args = append(args, fmt.Sprintf("%q", "--lock-path"), fmt.Sprintf("%q", options.LockPath))
+	}
 	return fmt.Sprintf(`[mcp_servers.%s]
 command = %q
-args = ["--model", %q, "--retries", "%d", "--retry-interval", %q, "--log", %q, "--log-level", %q]
+args = [%s]
 env_vars = ["GLM_API_KEY"]
-`, name, executable, model, retries, retryInterval.String(), logPath, logLevel)
+`, name, executable, strings.Join(args, ", "))
 }
 
 func GenerateCodexCLICommand(options CodexConfigOptions) string {
@@ -68,5 +84,8 @@ func GenerateCodexCLICommand(options CodexConfigOptions) string {
 		parts[1] = "visionmcp"
 	}
 	parts = append(parts, options.Executable)
+	if options.LockPath != "" {
+		parts = append(parts, "--lock-path", options.LockPath)
+	}
 	return strings.Join(parts, " ")
 }

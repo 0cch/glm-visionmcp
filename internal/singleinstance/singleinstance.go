@@ -11,7 +11,17 @@ import (
 var ErrLocked = errors.New("another visionmcp instance is already running")
 
 func LockPath() (string, error) {
-	base := os.Getenv("VISIONMCP_LOCK_PATH")
+	return LockPathWith("", os.Getenv)
+}
+
+// LockPathWith resolves the lock path honoring, in order: the explicit
+// override (e.g. a --lock-path CLI flag), then the VISIONMCP_LOCK_PATH
+// environment variable, then the per-user cache default.
+func LockPathWith(override string, getenv func(string) string) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	base := getenv("VISIONMCP_LOCK_PATH")
 	if base != "" {
 		return base, nil
 	}

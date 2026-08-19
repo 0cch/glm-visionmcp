@@ -24,6 +24,7 @@ type Config struct {
 	Retries       int
 	DryRun        bool
 	RetryInterval time.Duration
+	LockPath      string
 }
 
 func Parse(args []string, env func(string) string) (Config, error) {
@@ -47,6 +48,7 @@ func Parse(args []string, env func(string) string) (Config, error) {
 	fs.IntVar(&cfg.Retries, "retries", cfg.Retries, "GLM API retry count after the first request")
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "print the generated Codex MCP config and exit")
 	fs.DurationVar(&cfg.RetryInterval, "retry-interval", cfg.RetryInterval, "delay between GLM API retries")
+	fs.StringVar(&cfg.LockPath, "lock-path", "", "single-instance lock file path (default: VISIONMCP_LOCK_PATH or user cache)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
