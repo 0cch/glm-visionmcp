@@ -85,7 +85,7 @@ func TestCompleteContextCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	client := Client{Endpoint: server.URL, APIKey: "key", Model: "glm"}
-	if _, err := client.Complete(ctx, "prompt", "data:image/png;base64,abc"); err == nil || !strings.Contains(err.Error(), "call GLM API") {
+	if _, err := client.Complete(ctx, "prompt", "data:image/png;base64,abc"); err == nil || !strings.Contains(err.Error(), "call API") {
 		t.Fatalf("Complete() error = %v", err)
 	}
 }

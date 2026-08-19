@@ -61,9 +61,9 @@ type APIError struct {
 
 func (e APIError) Error() string {
 	if e.Type != "" {
-		return fmt.Sprintf("GLM API error: type=%s code=%v message=%s", e.Type, e.Code, e.Message)
+		return fmt.Sprintf("API error: type=%s code=%v message=%s", e.Type, e.Code, e.Message)
 	}
-	return fmt.Sprintf("GLM API error: code=%v message=%s", e.Code, e.Message)
+	return fmt.Sprintf("API error: code=%v message=%s", e.Code, e.Message)
 }
 
 func (c Client) Complete(ctx context.Context, prompt, imageDataURL string) (string, error) {
@@ -95,11 +95,11 @@ func (c Client) complete(ctx context.Context, prompt, imageDataURL string) (stri
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
-		return "", fmt.Errorf("encode GLM request: %w", err)
+		return "", fmt.Errorf("encode request: %w", err)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("create GLM request: %w", err)
+		return "", fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -110,33 +110,33 @@ func (c Client) complete(ctx context.Context, prompt, imageDataURL string) (stri
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("call GLM API: %w", err)
+		return "", fmt.Errorf("call API: %w", err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return "", fmt.Errorf("read GLM response: %w", err)
+		return "", fmt.Errorf("read response: %w", err)
 	}
 	var parsed Response
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			return "", fmt.Errorf("GLM API error: status=%d body=%s", resp.StatusCode, truncate(string(data), 1024))
+			return "", fmt.Errorf("API error: status=%d body=%s", resp.StatusCode, truncate(string(data), 1024))
 		}
-		return "", fmt.Errorf("decode GLM response: %w", err)
+		return "", fmt.Errorf("decode response: %w", err)
 	}
 	if parsed.Error != nil && parsed.Error.Message != "" {
 		err := &APIError{Code: parsed.Error.Code, Message: parsed.Error.Message, Type: parsed.Error.Type}
 		return "", fmt.Errorf("%w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", fmt.Errorf("GLM API error: status=%d message=%s", resp.StatusCode, parsed.Error.Message)
+		return "", fmt.Errorf("API error: status=%d message=%s", resp.StatusCode, parsed.Error.Message)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("GLM response contains no choices: %s", truncate(string(data), 1024))
+		return "", fmt.Errorf("response contains no choices: %s", truncate(string(data), 1024))
 	}
 	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
 	if content == "" {
-		return "", fmt.Errorf("GLM response contains no content")
+		return "", fmt.Errorf("response contains no content")
 	}
 	return content, nil
 }

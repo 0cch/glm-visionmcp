@@ -16,6 +16,7 @@ type CodexConfigOptions struct {
 	LogPath       string
 	LogLevel      string
 	Model         string
+	BaseURL       string
 	Retries       int
 	RetryInterval time.Duration
 	LockPath      string
@@ -69,22 +70,28 @@ func GenerateCodexConfig(options CodexConfigOptions) string {
 		fmt.Sprintf("%q", "--log-level"),
 		fmt.Sprintf("%q", logLevel),
 	}
+	if options.BaseURL != "" {
+		args = append(args, fmt.Sprintf("%q", "--base-url"), fmt.Sprintf("%q", options.BaseURL))
+	}
 	if options.LockPath != "" {
 		args = append(args, fmt.Sprintf("%q", "--lock-path"), fmt.Sprintf("%q", options.LockPath))
 	}
 	return fmt.Sprintf(`[mcp_servers.%s]
 command = %q
 args = [%s]
-env_vars = ["GLM_API_KEY"]
+env_vars = ["OPENAI_API_KEY", "GLM_API_KEY"]
 `, name, executable, strings.Join(args, ", "))
 }
 
 func GenerateCodexCLICommand(options CodexConfigOptions) string {
-	parts := []string{"codex mcp add", options.ServerName, "--env GLM_API_KEY", "--"}
+	parts := []string{"codex mcp add", options.ServerName, "--env OPENAI_API_KEY --env GLM_API_KEY --"}
 	if options.ServerName == "" {
 		parts[1] = "visionmcp"
 	}
 	parts = append(parts, options.Executable)
+	if options.BaseURL != "" {
+		parts = append(parts, "--base-url", options.BaseURL)
+	}
 	if options.LockPath != "" {
 		parts = append(parts, "--lock-path", options.LockPath)
 	}

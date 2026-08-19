@@ -112,6 +112,7 @@ func generateConfig(cfg config.Config) string {
 		LogPath:       logPath,
 		LogLevel:      cfg.LogLevel,
 		Model:         cfg.Model,
+		BaseURL:       cfg.BaseURL,
 		Retries:       cfg.Retries,
 		RetryInterval: cfg.RetryInterval,
 		LockPath:      cfg.LockPath,

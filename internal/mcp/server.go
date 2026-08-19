@@ -97,7 +97,7 @@ func (s Server) handleLine(ctx context.Context, line string) *Response {
 	case "tools/list":
 		return &Response{JSONRPC: "2.0", ID: request.ID, Result: ListToolsResult{Tools: []Tool{{
 			Name:        "analyze_image",
-			Description: "Analyze one image with GLM-4.6V-Flash and return text for non-multimodal models.",
+			Description: "Analyze one image with the configured OpenAI-compatible vision model and return text for non-multimodal models.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

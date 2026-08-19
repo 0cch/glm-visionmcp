@@ -10,11 +10,13 @@ import (
 	"time"
 )
 
-const DefaultAPIEndpoint = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+const DefaultBaseURL = "https://open.bigmodel.cn/api/paas/v4"
+const DefaultAPIEndpoint = DefaultBaseURL + "/chat/completions"
 const DefaultModel = "glm-4.6v-flash"
 
 type Config struct {
 	APIKey        string
+	BaseURL       string
 	APIEndpoint   string
 	Model         string
 	LogPath       string
@@ -38,16 +40,18 @@ func Parse(args []string, env func(string) string) (Config, error) {
 		RetryInterval: time.Second,
 	}
 	fs := flag.NewFlagSet("visionmcp", flag.ContinueOnError)
-	fs.StringVar(&cfg.APIKey, "api-key", env("GLM_API_KEY"), "GLM API key (or GLM_API_KEY)")
-	fs.StringVar(&cfg.APIEndpoint, "api-endpoint", cfg.APIEndpoint, "GLM chat completions endpoint")
-	fs.StringVar(&cfg.Model, "model", cfg.Model, "GLM vision model")
+	fs.StringVar(&cfg.APIKey, "api-key", apiKeyEnv(env), "API key (OPENAI_API_KEY, GLM_API_KEY, or --api-key)")
+	fs.StringVar(&cfg.BaseURL, "base-url", env("OPENAI_BASE_URL"), "OpenAI-compatible API base URL (or OPENAI_BASE_URL)")
+	var deprecatedEndpoint string
+	fs.StringVar(&deprecatedEndpoint, "api-endpoint", "", "deprecated: full chat completions endpoint URL (use --base-url)")
+	fs.StringVar(&cfg.Model, "model", cfg.Model, "vision model")
 	fs.StringVar(&cfg.LogPath, "log", "", "log file path (default: stderr)")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level: debug, info, warn, error")
 	fs.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "API request timeout")
 	fs.Int64Var(&cfg.MaxImageMB, "max-image-mb", cfg.MaxImageMB, "maximum image file size in MiB")
-	fs.IntVar(&cfg.Retries, "retries", cfg.Retries, "GLM API retry count after the first request")
+	fs.IntVar(&cfg.Retries, "retries", cfg.Retries, "API retry count after the first request")
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "print the generated Codex MCP config and exit")
-	fs.DurationVar(&cfg.RetryInterval, "retry-interval", cfg.RetryInterval, "delay between GLM API retries")
+	fs.DurationVar(&cfg.RetryInterval, "retry-interval", cfg.RetryInterval, "delay between API retries")
 	fs.StringVar(&cfg.LockPath, "lock-path", "", "single-instance lock file path (default: VISIONMCP_LOCK_PATH or user cache)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -55,12 +59,24 @@ func Parse(args []string, env func(string) string) (Config, error) {
 	if fs.NArg() > 0 {
 		return Config{}, fmt.Errorf("unexpected argument: %s", fs.Arg(0))
 	}
+	if deprecatedEndpoint != "" {
+		cfg.APIEndpoint = deprecatedEndpoint
+	} else if cfg.BaseURL != "" {
+		cfg.APIEndpoint = strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
+	}
 	return cfg, cfg.Validate()
+}
+
+func apiKeyEnv(env func(string) string) string {
+	if value := env("OPENAI_API_KEY"); value != "" {
+		return value
+	}
+	return env("GLM_API_KEY")
 }
 
 func (c Config) Validate() error {
 	if !c.DryRun && strings.TrimSpace(c.APIKey) == "" {
-		return errors.New("API key is required (set GLM_API_KEY or use --api-key)")
+		return errors.New("API key is required (set OPENAI_API_KEY, GLM_API_KEY, or use --api-key)")
 	}
 	if !strings.HasPrefix(c.APIEndpoint, "https://") && !strings.HasPrefix(c.APIEndpoint, "http://") {
 		return errors.New("API endpoint must start with http:// or https://")

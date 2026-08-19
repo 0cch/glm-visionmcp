@@ -17,11 +17,11 @@ func TestGenerateCodexConfig(t *testing.T) {
 	want := `[mcp_servers.vision]` + "\n" +
 		`command = "` + strings.ReplaceAll(filepath.Join(`D:\Tools\visionmcp`, "visionmcp.exe"), `\`, `\\`) + `"` + "\n" +
 		`args = ["--model", "glm-4.6v-flash", "--retries", "5", "--retry-interval", "1s", "--log", "D:\\Logs\\visionmcp.log", "--log-level", "debug"]` + "\n" +
-		`env_vars = ["GLM_API_KEY"]` + "\n"
+		`env_vars = ["OPENAI_API_KEY", "GLM_API_KEY"]` + "\n"
 	if got != want {
 		t.Fatalf("GenerateCodexConfig() =\n%s\nwant:\n%s", got, want)
 	}
-	if !strings.Contains(got, "env_vars = [\"GLM_API_KEY\"]") {
+	if !strings.Contains(got, "env_vars = [\"OPENAI_API_KEY\", \"GLM_API_KEY\"]") {
 		t.Fatalf("config does not forward API key env: %s", got)
 	}
 }
@@ -30,6 +30,19 @@ func TestGenerateCodexConfigDefaults(t *testing.T) {
 	got := GenerateCodexConfig(CodexConfigOptions{})
 	if !strings.Contains(got, "[mcp_servers.visionmcp]") || !strings.Contains(got, "glm-4.6v-flash") || !strings.Contains(got, "info") {
 		t.Fatalf("config = %s", got)
+	}
+}
+
+func TestGenerateCodexConfigBaseURL(t *testing.T) {
+	got := GenerateCodexConfig(CodexConfigOptions{
+		ServerName: "vision",
+		Executable: `D:\Tools\visionmcp\visionmcp.exe`,
+		LogPath:    `D:\Logs\visionmcp.log`,
+		Model:      "glm-4.6v-flash",
+		BaseURL:    "https://api.example.com/v1",
+	})
+	if !strings.Contains(got, `"--base-url", "https://api.example.com/v1"`) {
+		t.Fatalf("config missing base-url arg: %s", got)
 	}
 }
 
@@ -48,13 +61,18 @@ func TestGenerateCodexConfigLockPath(t *testing.T) {
 
 func TestGenerateCodexCLICommand(t *testing.T) {
 	got := GenerateCodexCLICommand(CodexConfigOptions{ServerName: "vision", Executable: `D:\Tools\visionmcp\visionmcp.exe`})
-	want := `codex mcp add vision --env GLM_API_KEY -- D:\Tools\visionmcp\visionmcp.exe`
+	want := `codex mcp add vision --env OPENAI_API_KEY --env GLM_API_KEY -- D:\Tools\visionmcp\visionmcp.exe`
 	if got != want {
 		t.Fatalf("GenerateCodexCLICommand() = %s, want %s", got, want)
 	}
 	gotLock := GenerateCodexCLICommand(CodexConfigOptions{ServerName: "vision", Executable: `D:\Tools\visionmcp\visionmcp.exe`, LockPath: `C:\locks\visionmcp.lock`})
-	wantLock := `codex mcp add vision --env GLM_API_KEY -- D:\Tools\visionmcp\visionmcp.exe --lock-path C:\locks\visionmcp.lock`
+	wantLock := `codex mcp add vision --env OPENAI_API_KEY --env GLM_API_KEY -- D:\Tools\visionmcp\visionmcp.exe --lock-path C:\locks\visionmcp.lock`
 	if gotLock != wantLock {
 		t.Fatalf("GenerateCodexCLICommand() lock = %s, want %s", gotLock, wantLock)
+	}
+	gotBase := GenerateCodexCLICommand(CodexConfigOptions{ServerName: "vision", Executable: `D:\Tools\visionmcp\visionmcp.exe`, BaseURL: "https://api.example.com/v1"})
+	wantBase := `codex mcp add vision --env OPENAI_API_KEY --env GLM_API_KEY -- D:\Tools\visionmcp\visionmcp.exe --base-url https://api.example.com/v1`
+	if gotBase != wantBase {
+		t.Fatalf("GenerateCodexCLICommand() base = %s, want %s", gotBase, wantBase)
 	}
 }
