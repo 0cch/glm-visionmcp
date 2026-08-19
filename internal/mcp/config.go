@@ -57,7 +57,7 @@ func GenerateCodexConfig(options CodexConfigOptions) string {
 	}
 	return fmt.Sprintf(`[mcp_servers.%s]
 command = %q
-args = ["--model", %q, "--retries", %d, "--retry-interval", %q, "--log", %q, "--log-level", %q]
+args = ["--model", %q, "--retries", "%d", "--retry-interval", %q, "--log", %q, "--log-level", %q]
 env_vars = ["GLM_API_KEY"]
 `, name, executable, model, retries, retryInterval.String(), logPath, logLevel)
 }
