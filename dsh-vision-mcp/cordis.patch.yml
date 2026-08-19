@@ -24,6 +24,8 @@
 #       routeSuffix: '-vision'
 #       toolEnabled: true
 #       guidance: true
+#       lockPath: 'C:\\tools\\visionmcp-bridge.lock'  # optional: override
+#         the visionmcp lock (config > VISIONMCP_LOCK_PATH > default)
 - insert:
     - id: vision
       name: 'dsh-vision-mcp'

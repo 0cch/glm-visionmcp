@@ -56,6 +56,7 @@ dsh web --patch /path/to/dsh-vision-mcp/cordis.patch.yml
 | `VISIONMCP_PATH` | visionmcp.exe 的绝对路径 | `<cwd>/visionmcp.exe` |
 | `VISIONMCP_CWD` | visionmcp 的工作目录（影响相对图片路径解析） | `<cwd>` |
 | `GLM_API_KEY` | 智谱 API Key（visionmcp 必填，会透传给子进程） | 空 |
+| `VISIONMCP_LOCK_PATH` | visionmcp 单实例锁路径（被 `lockPath` 配置覆盖） | `$DSH_HOME/visionmcp-bridge.lock` |
 
 ### 插件配置项（在 profile 的 `cordis.patch.yml` 按 `id: vision` 覆盖）
 
@@ -74,6 +75,7 @@ dsh web --patch /path/to/dsh-vision-mcp/cordis.patch.yml
     cwd: 'C:\\tools'         # 相对图片路径的解析基准
     serverName: vision       # 工具命名空间：mcp__<serverName>__analyze_image
     labelPrefix: ''          # 每个图片分析文本前的可选前缀
+    lockPath: 'C:\\tools\\visionmcp-bridge.lock'  # 可选：覆盖 visionmcp 单实例锁路径
 ```
 
 想关闭某项能力，把对应布尔设为 `false`。
@@ -89,4 +91,5 @@ dsh web --patch /path/to/dsh-vision-mcp/cordis.patch.yml
 
 - 需要用户**选择 `-vision` 模型组**（原纯文本路由保持不动，这是有意的：避免给原路由硬声明图片能力带来副作用）。
 - visionmcp 有单实例锁（见 [README](../../README.md#single-instance)）。插件为子进程设置独立的 `VISIONMCP_LOCK_PATH`（默认 `$DSH_HOME/visionmcp-bridge.lock`），与手动启动的实例互不冲突。
+- 单实例锁路径可按 `lockPath`（配置）> `VISIONMCP_LOCK_PATH`（环境变量）> 默认 `$DSH_HOME/visionmcp-bridge.lock` 的优先级覆盖，便于多实例并存或改用共享锁。
 - 图片字节会上传到智谱服务器进行视觉分析；未配置 key 或分析失败时以 `[visionmcp: ...]` 占位继续，不会卡死。

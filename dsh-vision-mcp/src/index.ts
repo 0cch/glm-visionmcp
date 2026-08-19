@@ -37,6 +37,8 @@ export interface Config {
   serverName: string
   /** Suffix added to each wrapped provider route (e.g. deepseek-official -> deepseek-official-vision). */
   routeSuffix: string
+  /** Lock file path for the visionmcp child (defaults to VISIONMCP_LOCK_PATH, then <DSH_HOME>/visionmcp-bridge.lock). */
+  lockPath?: string
 
   // ── system-prompt guidance ────────────────────────────────────────────────
   /** Whether to inject the vision usage guidance into the system prompt. */
@@ -60,6 +62,7 @@ export const Config: Schema<Config> = Schema.object({
   labelPrefix: Schema.string().default(''),
   serverName: Schema.string().default('vision'),
   routeSuffix: Schema.string().default('-vision'),
+  lockPath: Schema.string(),
   guidance: Schema.boolean().default(true),
   guidanceText: Schema.string(),
   sectionOrder: Schema.number().default(120),
@@ -464,7 +467,7 @@ export class VisionMcpClient {
     if (this.disposed) return
 
     const command = resolveCommand(config)
-    const childEnv = resolveChildEnv()
+    const childEnv = resolveChildEnv(config)
 
     this.transport = new StdioClientTransport({
       command,
@@ -504,17 +507,25 @@ function requireNodePathJoin(...parts: string[]): string {
   return path.join(...parts)
 }
 
-/** Ambient env for the visionmcp child, with a dedicated lock path under the DSH data directory. */
-function resolveChildEnv(): Record<string, string> {
+/**
+ * Ambient env for the visionmcp child. The lock path follows the override
+ * chain: `config.lockPath` > existing `VISIONMCP_LOCK_PATH` > default
+ * `<DSH_HOME>/visionmcp-bridge.lock`.
+ */
+function resolveChildEnv(config: Config): Record<string, string> {
   const env: Record<string, string> = {}
-  const dshHome = process.env.DSH_HOME
-  const lockRoot = dshHome ?? process.env.LOCALAPPDATA ?? process.env.HOME ?? ''
-  const lockPath = requireNodePathJoin(lockRoot, 'visionmcp-bridge.lock')
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue
     env[key] = value
   }
-  env.VISIONMCP_LOCK_PATH = lockPath
+  const explicit = config.lockPath?.trim()
+  if (explicit) {
+    env.VISIONMCP_LOCK_PATH = explicit
+  } else if (!env.VISIONMCP_LOCK_PATH) {
+    const dshHome = process.env.DSH_HOME
+    const lockRoot = dshHome ?? process.env.LOCALAPPDATA ?? process.env.HOME ?? ''
+    env.VISIONMCP_LOCK_PATH = requireNodePathJoin(lockRoot, 'visionmcp-bridge.lock')
+  }
   return env
 }
 
