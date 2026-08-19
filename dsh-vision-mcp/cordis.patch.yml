@@ -1,17 +1,16 @@
 # dsh-vision-mcp bundle patch.
 #
-# Registers the dsh-vision-mcp plugin, which gives a text-only DeepSeek Harness
-# deployment vision through ONE visionmcp stdio process (GLM-4.6V-Flash). The
-# plugin itself manages the single shared MCP connection and provides both
-# capabilities:
+# Registers the dsh-vision-mcp plugin, which gives ANY text-only DeepSeek
+# Harness deployment vision through ONE visionmcp stdio process
+# (GLM-4.6V-Flash). The plugin:
 #
-# 1. Native vision tool: registers `mcp__vision__analyze_image` on `ctx.tools`
-#    so the model can analyze an image it references by path, URL, or raw
-#    base64 bytes.
-# 2. Automatic image bridge: listens on `llm/stream`, turns any image block in
-#    a user message into a visionmcp analysis through the SAME connection
-#    before it reaches a text-only provider — uploads/pastes no longer hit
-#    "model does not support images".
+# 1. Auto-registers a `<provider>-vision` parallel route for every text-only
+#    provider (e.g. `deepseek-official-vision`): the wrapper declares image
+#    input so the harness admits pasted/uploaded images, then transcribes
+#    every image block via visionmcp before delegating to the real adapter.
+#    Pick the `-vision` model group in the selector to use it.
+# 2. Registers a native `mcp__vision__analyze_image` tool for image files.
+# 3. Injects system-prompt guidance for the tool.
 #
 # Override in a later layer (profile cordis.patch.yml or --patch) by id:
 #
@@ -21,15 +20,17 @@
 #       env:
 #         GLM_API_KEY: !!js 'process.env.GLM_API_KEY ?? ""'
 #       model: glm-4.6v-flash
-#       bridgeEnabled: true
+#       routeEnabled: true
+#       routeSuffix: '-vision'
 #       toolEnabled: true
 #       guidance: true
 - insert:
     - id: vision
       name: 'dsh-vision-mcp'
       config:
-        bridgeEnabled: true
+        routeEnabled: true
         toolEnabled: true
+        bridgeEnabled: false
         command: !!js 'process.env.VISIONMCP_PATH?.trim() || process.getBuiltinModule("node:path").join(process.cwd(), "visionmcp.exe")'
         model: glm-4.6v-flash
         retries: 5
@@ -37,4 +38,5 @@
         timeoutMs: 120000
         cwd: !!js 'process.env.VISIONMCP_CWD || process.cwd()'
         serverName: vision
+        routeSuffix: '-vision'
         guidance: true

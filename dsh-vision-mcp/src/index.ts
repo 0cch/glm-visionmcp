@@ -1,29 +1,9 @@
-/**
- * dsh-vision-mcp — DeepSeek Harness vision bundle (single plugin, single MCP).
- *
- * One plugin gives a text-only DeepSeek Harness deployment vision with exactly
- * ONE visionmcp stdio process, shared by both capabilities:
- *
- * 1. Native vision tool: registers `mcp__vision__analyze_image` on
- *    `ctx.tools` (the same public name the in-box dsh-mcp-client bridge would
- *    produce) so the model can analyze an image it references by path, URL, or
- *    raw base64 bytes.
- * 2. Automatic image bridge: listens on the `llm/stream` waterfall (the single
- *    entry every provider's model request passes through) and replaces any
- *    image block in a user message with the text produced by the SAME
- *    visionmcp connection. Uploading or pasting an image into a session no
- *    longer hits "model does not support images" — the image never reaches the
- *    text-only provider, the GLM description does. Models that already declare
- *    `image` input are left untouched.
- *
- * Both capabilities share one lazily-started MCP client, so only one
- * visionmcp.exe child runs per harness process (see `VisionMcpClient`).
- */
-
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
-import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, LlmAdapter, LlmModelInfo, LlmResolvedModelInfo, StreamChunk, Message } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter as LlmAdapterBase } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-attachment'
 
@@ -33,11 +13,12 @@ export const name = 'dsh-vision-mcp'
 export const inject = ['systemPrompt', 'llm', 'attachments', 'tools']
 
 export interface Config {
-  // ── single visionmcp connection (shared) ──────────────────────────────────
-  /** Whether the automatic image bridge is enabled (default true). */
-  bridgeEnabled: boolean
+  /** Whether `-vision` parallel routes are registered for text-only providers (default true). */
+  routeEnabled: boolean
   /** Whether the `mcp__vision__analyze_image` tool is registered (default true). */
   toolEnabled: boolean
+  /** Whether the automatic llm/stream bridge is registered (kept for backward compat; route wrapping supersedes it). */
+  bridgeEnabled: boolean
   /** visionmcp executable path (defaults to VISIONMCP_PATH then <cwd>/visionmcp.exe). */
   command?: string
   /** Vision model passed to visionmcp (default glm-4.6v-flash). */
@@ -54,6 +35,8 @@ export interface Config {
   labelPrefix: string
   /** Public tool namespace (`mcp__<serverName>__analyze_image`). */
   serverName: string
+  /** Suffix added to each wrapped provider route (e.g. deepseek-official -> deepseek-official-vision). */
+  routeSuffix: string
 
   // ── system-prompt guidance ────────────────────────────────────────────────
   /** Whether to inject the vision usage guidance into the system prompt. */
@@ -65,8 +48,9 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  bridgeEnabled: Schema.boolean().default(true),
+  routeEnabled: Schema.boolean().default(true),
   toolEnabled: Schema.boolean().default(true),
+  bridgeEnabled: Schema.boolean().default(false),
   command: Schema.string(),
   model: Schema.string().default('glm-4.6v-flash'),
   retries: Schema.number().default(5),
@@ -75,6 +59,7 @@ export const Config: Schema<Config> = Schema.object({
   cwd: Schema.string(),
   labelPrefix: Schema.string().default(''),
   serverName: Schema.string().default('vision'),
+  routeSuffix: Schema.string().default('-vision'),
   guidance: Schema.boolean().default(true),
   guidanceText: Schema.string(),
   sectionOrder: Schema.number().default(120),
@@ -100,12 +85,12 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(() => ctx.tools.register(createToolDefinition(client, publicName, config)))
   }
 
-  // 2. Automatic image bridge on llm/stream.
-  if (config.bridgeEnabled) {
-    ctx.on('llm/stream', (options, next) => {
-      if (!hasImageBlock(options.messages)) return next()
-      return rewriteStream(ctx, config, client, options, next)
-    }, { global: true })
+  // 2. -vision parallel routes for every text-only provider.
+  if (config.routeEnabled) {
+    const registry = new VisionRouteRegistry(ctx, config, client)
+    ctx.effect(() => () => registry.dispose())
+    registry.sync()
+    ctx.on('llm/adapters-updated', () => registry.sync())
   }
 
   // 3. System-prompt guidance.
@@ -122,11 +107,246 @@ export function apply(ctx: Context, config: Config): void {
   }
 }
 
+/** Whether a resolved model info declares image input. */
+function supportsImages(info: LlmResolvedModelInfo | LlmModelInfo | undefined): boolean {
+  return info?.inputModalities?.includes('image') === true
+}
+
 /**
- * Build the model-facing `mcp__<serverName>__analyze_image` tool backed by the
- * shared visionmcp connection. `execute` mirrors the wire contract of the MCP
- * server: `prompt` + exactly one of `image.path`, `image.url`, `image.data`.
+ * Manages the `<provider>-vision` wrapper registrations. Scans the live
+ * provider set on every `llm/adapters-updated` and registers a wrapper route
+ * for each text-only provider, keeping the set in sync.
  */
+class VisionRouteRegistry {
+  private readonly registered = new Map<string, () => void>()
+  private readonly seen = new Set<string>()
+
+  constructor(
+    private readonly ctx: Context,
+    private readonly config: Config,
+    private readonly client: VisionMcpClient,
+  ) {}
+
+  dispose(): void {
+    for (const dispose of this.registered.values()) {
+      try { dispose() } catch { /* already gone */ }
+    }
+    this.registered.clear()
+  }
+
+  sync(): void {
+    let providers: Array<{ id: string; name: string }>
+    try {
+      providers = this.ctx.llm.listProviders()
+    } catch {
+      return
+    }
+    const live = new Set<string>()
+    for (const provider of providers) {
+      live.add(provider.id)
+      const visionRoute = `${provider.id}${this.config.routeSuffix}`
+      if (this.registered.has(visionRoute) || this.seen.has(visionRoute)) continue
+      // Try synchronously first (fast path); probe is async so fall back to the
+      // adapters-updated re-entry for providers that need probing.
+      void this.tryWrap(provider.id, visionRoute)
+    }
+    // Release registrations whose source provider disappeared.
+    for (const [visionRoute, dispose] of [...this.registered]) {
+      const source = visionRoute.endsWith(this.config.routeSuffix)
+        ? visionRoute.slice(0, -this.config.routeSuffix.length)
+        : visionRoute
+      if (!live.has(source)) {
+        try { dispose() } catch { /* already gone */ }
+        this.registered.delete(visionRoute)
+        this.seen.delete(visionRoute)
+      }
+    }
+  }
+
+  private async tryWrap(sourceProvider: string, visionRoute: string): Promise<void> {
+    let inner: LlmAdapter | undefined
+    try {
+      // registration() is TS-private but present at runtime in dsh rc.5+.
+      const registration = (this.ctx.llm as unknown as { registration(p: string): { adapter: LlmAdapter } }).registration(sourceProvider)
+      inner = registration?.adapter
+    } catch {
+      inner = undefined
+    }
+    if (!inner) return
+
+    // Only wrap routes that do NOT already declare image input natively. Probe
+    // via listModels; if any model natively accepts image, skip wrapping.
+    try {
+      if (inner.listModels) {
+        const models = await Promise.resolve(inner.listModels(sourceProvider))
+        if (models.some(model => supportsImages(model))) {
+          this.seen.add(visionRoute)
+          return
+        }
+      }
+    } catch {
+      // Can't probe; attempt to wrap anyway (registerAdapter will still validate).
+    }
+
+    try {
+      const handle = this.ctx.llm.registerAdapter(
+        [visionRoute],
+        new VisionRouteAdapter(this.ctx, inner, sourceProvider, visionRoute, this.config, this.client),
+      )
+      this.registered.set(visionRoute, handle)
+    } catch (error) {
+      // DUPLICATE_ADAPTER or an invalid provider — another instance owns it or
+      // this provider can't be wrapped; mark it seen so we don't retry forever.
+      this.seen.add(visionRoute)
+    }
+  }
+}
+
+/**
+ * Wraps a text-only provider adapter. Declares image input on every model so
+ * the harness admits pasted/uploaded images, and transcribes image content
+ * blocks through the shared visionmcp connection before delegating to the real
+ * adapter. Only transcribes for models that do not natively accept image.
+ */
+class VisionRouteAdapter extends LlmAdapterBase {
+  private readonly modalityPromises = new Map<string, Promise<boolean>>()
+
+  constructor(
+    private readonly ctx: Context,
+    private readonly inner: LlmAdapter,
+    private readonly sourceProvider: string,
+    private readonly visionProvider: string,
+    private readonly config: Config,
+    private readonly client: VisionMcpClient,
+  ) {
+    super()
+  }
+
+  override providerInfo(provider: string): { id: string; name: string } {
+    return { id: provider, name: `${this.sourceProvider} + 自动识图` }
+  }
+
+  override providerRetryPolicy(_provider: string): ReturnType<LlmAdapter['providerRetryPolicy']> | undefined {
+    return this.inner.providerRetryPolicy?.(this.sourceProvider)
+  }
+
+  override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+    return Promise.resolve(this.inner.listModels ? this.inner.listModels(this.sourceProvider) : Promise.resolve([]))
+      .then(models => models.map(model => ({
+        ...model,
+        provider,
+        ...supportsImages(model)
+          ? {}
+          : { inputModalities: [...(model.inputModalities ?? ['text']), 'image'] },
+      })))
+  }
+
+  override resolveModel(
+    provider: string,
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve(this.inner.resolveModel(this.sourceProvider, model, signal))
+      .then((info) => ({
+        ...info,
+        provider,
+        ...supportsImages(info)
+          ? {}
+          : { inputModalities: [...(info.inputModalities ?? ['text']), 'image'] },
+      }))
+  }
+
+  async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    const modelSupportsImages = await this.modelSupportsImages(options.model, options.signal)
+    let messages = options.messages
+    if (!modelSupportsImages && hasImageBlock(messages)) {
+      messages = await this.cleanMessages(messages, options.signal)
+    }
+    const next = messages === options.messages
+      ? options
+      : { ...options, messages }
+    // Delegate with the source provider so adapter internals that key off the
+    // provider route (e.g. pi-ai profile lookup, deepseek replay) behave.
+    yield* this.inner.stream({ ...next, provider: this.sourceProvider })
+  }
+
+  private modelSupportsImages(model: string, signal?: AbortSignal): Promise<boolean> {
+    let promise = this.modalityPromises.get(model)
+    if (!promise) {
+      promise = Promise.resolve(this.inner.resolveModel(this.sourceProvider, model, signal))
+        .then(supportsImages)
+        .catch(() => false)
+      this.modalityPromises.set(model, promise)
+    }
+    return promise
+  }
+
+  private async cleanMessages(messages: readonly Message[], signal?: AbortSignal): Promise<Message[]> {
+    const out: Message[] = []
+    for (const message of messages) {
+      if (!Array.isArray(message.content) || message.content.length === 0) {
+        out.push(message)
+        continue
+      }
+      const contextText = (message.content as readonly { type?: string; text?: string }[])
+        .filter(block => block.type === 'text' && typeof block.text === 'string')
+        .map(block => block.text as string)
+        .join(' ')
+      const content = await this.cleanBlocks(message.content, contextText, signal)
+      out.push(content === message.content ? message : { ...message, content })
+    }
+    return out
+  }
+
+  private async cleanBlocks(blocks: readonly ContentBlock[], contextText: string, signal?: AbortSignal): Promise<ContentBlock[]> {
+    const out: ContentBlock[] = []
+    for (const block of blocks) {
+      if (block.type === 'image' && block.attachment) {
+        const text = await this.transcribe(block.attachment, contextText, signal)
+        out.push({ type: 'text', text })
+      } else if ('content' in block && Array.isArray(block.content) && block.content.length > 0) {
+        const nested = await this.cleanBlocks(block.content as unknown as ContentBlock[], '', signal)
+        out.push({ ...block, content: nested })
+      } else {
+        out.push(block)
+      }
+    }
+    return out
+  }
+
+  private readonly transcribeCache = new Map<string, string>()
+
+  private async transcribe(
+    ref: ImageAttachmentRef,
+    contextText: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const key = String(ref.attachmentId)
+    const cached = this.transcribeCache.get(key)
+    if (cached !== undefined) return cached
+
+    const attachments = this.ctx.get('attachments') as { readImage(ref: ImageAttachmentRef): Promise<{ data: Uint8Array }> } | undefined
+    let text: string
+    if (!attachments) {
+      text = '[visionmcp: attachment service unavailable]'
+    } else {
+      try {
+        const stored = await attachments.readImage(ref)
+        const prompt = contextText && contextText.trim()
+          ? `The user attached this image alongside the following text. Answer the user's request using the image content, then summarize what is shown.\n\nUser text:\n${contextText}`
+          : 'Describe this image in detail.'
+        text = await this.client.analyzeData(this.config, prompt, stored.data)
+        if (this.config.labelPrefix !== '') text = `${this.config.labelPrefix}${text}`
+      } catch (error) {
+        text = `[visionmcp: failed to analyze this image — ${error instanceof Error ? error.message : String(error)}]`
+      }
+    }
+    this.transcribeCache.set(key, text)
+    return text
+  }
+}
+
+/** Build the model-facing `mcp__<serverName>__analyze_image` tool. */
 function createToolDefinition(client: VisionMcpClient, publicName: string, config: Config): ToolDefinition {
   return {
     name: publicName,
@@ -152,9 +372,7 @@ function createToolDefinition(client: VisionMcpClient, publicName: string, confi
     output: {
       schema: {
         type: 'object',
-        properties: {
-          analysis: { type: 'string' },
-        },
+        properties: { analysis: { type: 'string' } },
         required: ['analysis'],
         additionalProperties: false,
       },
@@ -171,95 +389,14 @@ function createToolDefinition(client: VisionMcpClient, publicName: string, confi
   }
 }
 
-/** Whether any message in the request carries an image block. */
+/** Whether any message in a request carries an image block. */
 function hasImageBlock(messages: readonly { content: readonly { type?: string }[] }[]): boolean {
   return messages.some(message => message.content.some(block => block.type === 'image'))
 }
 
 /**
- * Return a stream that first rewrites image blocks (asynchronously) and then
- * yields the downstream provider stream. The rewrite happens once, before the
- * first chunk is produced.
- */
-function rewriteStream(
-  ctx: Context,
-  config: Config,
-  client: VisionMcpClient,
-  options: GenerateOptions,
-  next: () => AsyncIterable<StreamChunk>,
-): AsyncIterable<StreamChunk> {
-  return (async function* () {
-    // Never intercept a route that natively supports images; its own path wins.
-    const modelSupportsImages = await routeSupportsImages(ctx, options)
-    if (!modelSupportsImages) {
-      options.messages = await Promise.all(options.messages.map(async (message) => {
-        if (!message.content.some(block => block.type === 'image')) return message
-        const content = await replaceImages(ctx, config, client, message.content)
-        return { ...message, content }
-      }))
-    }
-    yield* next()
-  })()
-}
-
-async function routeSupportsImages(ctx: Context, options: GenerateOptions): Promise<boolean> {
-  try {
-    const info = await ctx.llm.resolveModelInfo(options.provider, options.model)
-    return info.inputModalities?.includes('image') === true
-  } catch {
-    // Unknown capability: fall through to the bridge (refuse only when the
-    // adapter itself would refuse, which the bridge avoids by never sending
-    // an image block downstream).
-    return false
-  }
-}
-
-/** Replace every image block in one message's content with its analysis text. */
-async function replaceImages(
-  ctx: Context,
-  config: Config,
-  client: VisionMcpClient,
-  blocks: readonly ContentBlock[],
-): Promise<ContentBlock[]> {
-  const prompt = extractTextPrompt(blocks)
-  const result: ContentBlock[] = []
-  for (const block of blocks) {
-    if (block.type !== 'image') {
-      result.push(block)
-      continue
-    }
-    try {
-      const stored = await ctx.attachments.readImage(block.attachment)
-      const analysis = await client.analyzeData(config, prompt, stored.data)
-      const text = config.labelPrefix === '' ? analysis : `${config.labelPrefix}${analysis}`
-      result.push({ type: 'text', text })
-    } catch (error) {
-      // Degrade to a text note instead of failing the whole request.
-      result.push({
-        type: 'text',
-        text: `[visionmcp: failed to analyze this image — ${error instanceof Error ? error.message : String(error)}]`,
-      })
-    }
-  }
-  return result
-}
-
-/** Build one concise analysis prompt from the surrounding user text (if any). */
-function extractTextPrompt(blocks: readonly { type?: string; text?: string }[]): string {
-  const text = blocks
-    .filter(block => block.type === 'text' && typeof block.text === 'string')
-    .map(block => block.text as string)
-    .join('\n')
-    .trim()
-  if (text.length === 0) return 'Describe this image in detail.'
-  return `The user attached this image alongside the following text. Answer the user's request using the image content, then summarize what is shown.\n\nUser text:\n${text}`
-}
-
-/**
  * A lazy, shared MCP client to ONE visionmcp stdio server. Connects on first
- * use and stays connected until the plugin is disposed. Both the native tool
- * and the automatic bridge call through this single instance, so only one
- * visionmcp.exe child runs per harness process.
+ * use and stays connected until the plugin is disposed.
  */
 export class VisionMcpClient {
   private transport: import('@modelcontextprotocol/sdk/client/stdio.js').StdioClientTransport | undefined
@@ -367,11 +504,7 @@ function requireNodePathJoin(...parts: string[]): string {
   return path.join(...parts)
 }
 
-/**
- * Ambient env for the visionmcp child, with a dedicated lock path under the
- * DSH data directory so this instance never collides with a user-run or
- * tool-bridged visionmcp process.
- */
+/** Ambient env for the visionmcp child, with a dedicated lock path under the DSH data directory. */
 function resolveChildEnv(): Record<string, string> {
   const env: Record<string, string> = {}
   const dshHome = process.env.DSH_HOME
@@ -384,4 +517,7 @@ function resolveChildEnv(): Record<string, string> {
   env.VISIONMCP_LOCK_PATH = lockPath
   return env
 }
+
+
+
 
