@@ -1,22 +1,26 @@
 # dsh-vision-mcp
 
-给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供视觉能力的插件包（bundle）。它把 [visionmcp](../../README.md)（基于 GLM-4.6V-Flash 的视觉 MCP 服务器）作为底层能力桥接进 harness，让模型通过原生工具 `mcp__vision__analyze_image` 分析图片。
+给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供视觉能力的单一插件 bundle。它把 [visionmcp](../../README.md)（基于 GLM-4.6V-Flash 的视觉 MCP 服务器）作为底层能力提供方，通过**一个** visionmcp stdio 进程同时提供两种能力：
 
-**不修改 visionmcp 的任何代码**。visionmcp 保持独立可执行程序（`visionmcp.exe`），本插件只是通过 harness 内置的 `@deepseek-ai/dsh-mcp-client` 插件以 stdio 方式启动它、发现并注册它的工具。
+1. **原生视觉工具**：在 `ctx.tools` 上注册 `mcp__vision__analyze_image`，模型可主动调用它分析图片（按路径 / URL / base64）。
+2. **自动图片桥接**：监听 `llm/stream`，把用户消息里的图片块在到达纯文本模型之前，先用同一个 visionmcp 连接分析成文本——上传或粘贴图片不再出现“当前模型不支持图片”。
+
+**不修改 visionmcp 的任何代码**。visionmcp 保持独立可执行程序（`visionmcp.exe`），本插件只是以 stdio 方式启动它并通过 MCP 协议调用 `analyze_image`。
 
 ## 原理
 
 ```
 DeepSeek Harness (dsh)
-  └─ @deepseek-ai/dsh-mcp-client   （内置插件，本 bundle 在 cordis.patch.yml 中插入一行）
-        └─ stdio 启动 visionmcp.exe
-              └─ 工具发现：analyze_image
-                    └─ 注册为 ctx.tools 上的 mcp__vision__analyze_image
+  └─ dsh-vision-mcp（本 bundle 的插件，自己管理唯一的 visionmcp 连接）
+        ├─ ctx.tools.register(mcp__vision__analyze_image)   ← 模型可调用
+        ├─ ctx.on('llm/stream') 自动桥接                   ← 上传/截图自动分析
+        └─ stdio 启动 visionmcp.exe（唯一子进程，共享）
+              └─ analyze_image(prompt, image)
 ```
 
-- `dsh-mcp-client` 负责进程生命周期、工具发现/注册、超时与断线重连。
-- 模型调 `mcp__vision__analyze_image(prompt, image)`，参数原样转发给 visionmcp。
-- 本 bundle 还带一个可选增强插件：向系统提示注入一段视觉使用指引，提升模型主动调用工具的倾向。
+- 插件懒启动并复用**同一个** visionmcp 连接：第一次工具调用或第一次图片桥接时才 spawn，之后两个能力共用，全进程只跑一个 visionmcp.exe。
+- 自动桥接只在模型声明 `inputModalities` 不含 `image` 时生效；原生支持图片的模型（如 GLM-4V 直连）不拦截，走自己的多模态路径。
+- 同时向系统提示注入视觉使用指引，提升模型主动调用工具的倾向。
 
 ## 安装
 
@@ -25,83 +29,57 @@ DeepSeek Harness (dsh)
 ### 方式一：直接以 bundle 安装（推荐）
 
 ```sh
-# 在包含本目录的路径下执行（或换成 dsh-vision-mcp 的实际路径）
 dsh plugin --profile web add /path/to/dsh-vision-mcp
-```
-
-或者从 npm 安装：
-
-```sh
-dsh plugin --profile web add dsh-vision-mcp
 ```
 
 ### 方式二：用 --patch 临时启用（快速试玩）
 
-在任意目录写一个 `vision.cordis.yml`：
-
-```yaml
-- insert:
-    - id: vision-mcp
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: vision
-        transport: stdio
-        command: 'F:\\Code\\glm-visionmcp\\visionmcp.exe'
-        args: ['--model', 'glm-4.6v-flash', '--retries', '5', '--retry-interval', '1s', '--log-level', 'info']
-        env:
-          GLM_API_KEY: !!js 'process.env.GLM_API_KEY ?? ""'
-        cwd: !!js 'process.cwd()'
-        toolCallTimeoutMs: 120000
-        failOnStartupError: true
-```
-
-然后启动：
-
 ```sh
-dsh web --patch vision.cordis.yml
+dsh web --patch /path/to/dsh-vision-mcp/cordis.patch.yml
 ```
 
+`cordis.patch.yml` 已声明 `dsh.bundle.patch`，`dsh plugin add` 会把它作为独立 layer 应用；`--patch` 直接指向同一文件也可。
 
 > 从 GitHub 安装（`dsh plugin add github:you/dsh-vision-mcp`）时，pnpm 会拉取源码并运行 `prepare` 构建；首次会要求你在 profile 的 `pnpm-workspace.yaml` 中把 `dsh-vision-mcp` 加入 `allowBuilds` 授权，属于正常的安全确认。
-> 提示：用 `--patch` 直接指向 `cordis.patch.yml`（bundle 的主配置）时，其中的系统提示指引插件（`vision-guidance`）需要已安装 `dsh-vision-mcp` 包才能解析。上面这种"快速试玩"写法只启用核心工具桥接；想同时启用指引，用 `dsh plugin add` 完整安装本 bundle（方式一）。
-## 配置项
+
+## 配置
+
+### 环境变量
 
 | 环境变量 | 作用 | 默认值 |
 |---|---|---|
 | `VISIONMCP_PATH` | visionmcp.exe 的绝对路径 | `<cwd>/visionmcp.exe` |
 | `VISIONMCP_CWD` | visionmcp 的工作目录（影响相对图片路径解析） | `<cwd>` |
-| `GLM_API_KEY` | 智谱 API Key（visionmcp 必填） | 空 |
+| `GLM_API_KEY` | 智谱 API Key（visionmcp 必填，会透传给子进程） | 空 |
 
-如需在 profile 中覆盖默认配置，在 profile 的 `cordis.patch.yml` 中按 `id` 覆盖：
+### 插件配置项（在 profile 的 `cordis.patch.yml` 按 `id: vision` 覆盖）
 
 ```yaml
-- id: vision-mcp
+- id: vision
   config:
+    bridgeEnabled: true      # 自动图片桥接（上传/截图不再“不支持图片”）
+    toolEnabled: true        # 注册 mcp__vision__analyze_image 工具
+    guidance: true           # 注入系统提示指引
     command: 'C:\\tools\\visionmcp.exe'
-    env:
-      GLM_API_KEY: !!js 'process.env.GLM_API_KEY ?? ""'
+    model: glm-4.6v-flash    # visionmcp 的 --model
+    retries: 5               # GLM 请求重试次数
+    retryInterval: 1s
+    timeoutMs: 120000        # 单次分析超时（ms）
+    cwd: 'C:\\tools'         # 相对图片路径的解析基准
+    serverName: vision       # 工具命名空间：mcp__<serverName>__analyze_image
+    labelPrefix: ''          # 每个图片分析文本前的可选前缀
 ```
+
+想关闭某项能力，把对应布尔设为 `false`。
 
 ## 使用
 
-安装后，模型会看到工具 `mcp__vision__analyze_image`，参数：
-
-- `prompt`: 对图片的提问或提取任务（必填）。
-- `image`: 三种来源之一（三选一）：
-  - `path`: 绝对路径，或相对于 visionmcp 工作目录的相对路径；
-  - `url`: HTTP(S) 图片地址；
-  - `data`: 原始 base64 图片字节。
-
-例如让模型“分析屏幕截图并说明其中的报错信息”，它会自动调用该工具并返回文本分析结果。
-
-## 调整
-
-- 想关闭系统提示指引：`- id: vision-guidance` 行设 `disabled: true`。
-- 想换模型：在覆盖层改 `args` 里的 `--model`。
-- 工具超时默认 120s；GLM 分析较慢时可调大 `toolCallTimeoutMs`。
+- **上传 / 粘贴图片**：图片块被自动用 GLM 分析成文本后再发给模型，模型直接基于描述回答，不再提示“不支持图片”。
+- **让模型主动分析**：模型会看到工具 `mcp__vision__analyze_image`，参数：
+  - `prompt`: 对图片的提问或提取任务（必填）；
+  - `image`: 三种来源之一（三选一）：`path`（绝对或相对 visionmcp 工作目录的路径）、`url`（HTTP(S) 地址）、`data`（原始 base64 字节）。
 
 ## 已知限制
 
-- harness 目前只桥接 MCP 的 **tools** 能力，visionmcp 仅暴露工具，因此不受影响。
-- visionmcp 有单实例锁（见 [README](../../README.md#single-instance)）；若另一个进程已占用锁，dsh 启动的实例会以退出码 3 失败。此时重启那个进程或设置 `VISIONMCP_LOCK_PATH` 指向独立路径。
-
+- visionmcp 有单实例锁（见 [README](../../README.md#single-instance)）。插件为子进程设置独立的 `VISIONMCP_LOCK_PATH`（默认 `$DSH_HOME/visionmcp-bridge.lock`），与手动启动的实例互不冲突；同进程内所有能力共享这一个子进程，不会锁冲突。
+- 自动桥接需要模型请求经过 `llm/stream`（所有提供方、自定义模型都必经），因此对 deepseek-official、pi-ai、自定义提供方均生效。
