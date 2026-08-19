@@ -16,7 +16,7 @@ func TestGenerateCodexConfig(t *testing.T) {
 	})
 	want := `[mcp_servers.vision]` + "\n" +
 		`command = "` + strings.ReplaceAll(filepath.Join(`D:\Tools\visionmcp`, "visionmcp.exe"), `\`, `\\`) + `"` + "\n" +
-		`args = ["--model", "glm-4.6v-flash", "--retries", 5, "--retry-interval", "1s", "--log", "D:\\Logs\\visionmcp.log", "--log-level", "debug"]` + "\n" +
+		`args = ["--model", "glm-4.6v-flash", "--retries", "5", "--retry-interval", "1s", "--log", "D:\\Logs\\visionmcp.log", "--log-level", "debug"]` + "\n" +
 		`env_vars = ["GLM_API_KEY"]` + "\n"
 	if got != want {
 		t.Fatalf("GenerateCodexConfig() =\n%s\nwant:\n%s", got, want)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -60,7 +61,7 @@ func GenerateCodexConfig(options CodexConfigOptions) string {
 		fmt.Sprintf("%q", "--model"),
 		fmt.Sprintf("%q", model),
 		fmt.Sprintf("%q", "--retries"),
-		fmt.Sprintf("%d", retries),
+		strconv.Quote(strconv.Itoa(retries)),
 		fmt.Sprintf("%q", "--retry-interval"),
 		fmt.Sprintf("%q", retryInterval.String()),
 		fmt.Sprintf("%q", "--log"),
