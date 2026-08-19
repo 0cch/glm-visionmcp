@@ -1,0 +1,43 @@
+# dsh-vision-mcp bundle patch.
+#
+# Bridges the visionmcp stdio MCP server (GLM-4.6V-Flash) into DeepSeek
+# Harness through the in-box @deepseek-ai/dsh-mcp-client plugin. The model
+# sees the tool as `mcp__vision__analyze_image`. A companion plugin adds
+# system-prompt guidance so the model knows when to reach for it.
+#
+# Override in a later layer (profile cordis.patch.yml or --patch) by id:
+#
+#   - id: vision-mcp
+#     config:
+#       command: 'C:\\tools\\visionmcp.exe'
+#       env:
+#         GLM_API_KEY: !!js 'process.env.GLM_API_KEY ?? ""'
+- insert:
+    - id: vision-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: vision
+        transport: stdio
+        command: !!js 'process.env.VISIONMCP_PATH?.trim() || process.getBuiltinModule("node:path").join(process.cwd(), "visionmcp.exe")'
+        args:
+          - --model
+          - glm-4.6v-flash
+          - --retries
+          - '5'
+          - --retry-interval
+          - 1s
+          - --log-level
+          - info
+        env:
+          GLM_API_KEY: !!js 'process.env.GLM_API_KEY ?? ""'
+        cwd: !!js 'process.env.VISIONMCP_CWD || process.cwd()'
+        toolCallTimeoutMs: 120000
+        failOnStartupError: true
+        reconnect:
+          enabled: true
+          initialDelayMs: 500
+          maxDelayMs: 30000
+          maxAttempts: 10
+
+    - id: vision-guidance
+      name: 'dsh-vision-mcp'

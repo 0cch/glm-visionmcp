@@ -61,6 +61,12 @@ GLM requests are retried after the initial attempt. Defaults are 5 retries with 
 ```
 
 Authentication errors are not retried; transient network failures and GLM overload/rate-limit code `1305` are retried.
+
+## DeepSeek Harness integration
+
+This server can also be bridged into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) as a plugin. The bridge does not modify this codebase — visionmcp stays a standalone stdio MCP server and acts as the underlying capability provider. Harness's built-in `@deepseek-ai/dsh-mcp-client` spawns it, discovers the `analyze_image` tool, and registers it as `mcp__vision__analyze_image`.
+
+See [dsh-vision-mcp/README.md](dsh-vision-mcp/README.md) for installation and usage.
 ## Single instance
 
 Only one `visionmcp` process is allowed per user. The server uses an OS-level exclusive lock on:
@@ -70,3 +76,4 @@ Only one `visionmcp` process is allowed per user. The server uses an OS-level ex
 - Linux/XDG: `~/.cache/visionmcp/visionmcp.lock`
 
 If another instance is already running, the new process exits with code `3`. The lock is released automatically when the owning process exits. `VISIONMCP_LOCK_PATH` can override the lock location for testing.
+
