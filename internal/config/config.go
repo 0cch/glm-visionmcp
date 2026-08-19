@@ -14,6 +14,9 @@ const DefaultBaseURL = "https://open.bigmodel.cn/api/paas/v4"
 const DefaultAPIEndpoint = DefaultBaseURL + "/chat/completions"
 const DefaultModel = "glm-4.6v-flash"
 
+// DefaultHTTPAddr is the default listen address for --http mode.
+const DefaultHTTPAddr = "127.0.0.1:8765"
+
 type Config struct {
 	APIKey        string
 	BaseURL       string
@@ -27,6 +30,8 @@ type Config struct {
 	DryRun        bool
 	RetryInterval time.Duration
 	LockPath      string
+	HTTP          bool
+	HTTPAddr      string
 }
 
 func Parse(args []string, env func(string) string) (Config, error) {
@@ -38,6 +43,7 @@ func Parse(args []string, env func(string) string) (Config, error) {
 		MaxImageMB:    20,
 		Retries:       5,
 		RetryInterval: time.Second,
+		HTTPAddr:      DefaultHTTPAddr,
 	}
 	fs := flag.NewFlagSet("visionmcp", flag.ContinueOnError)
 	fs.StringVar(&cfg.APIKey, "api-key", apiKeyEnv(env), "API key (OPENAI_API_KEY, GLM_API_KEY, or --api-key)")
@@ -53,6 +59,8 @@ func Parse(args []string, env func(string) string) (Config, error) {
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "print the generated Codex MCP config and exit")
 	fs.DurationVar(&cfg.RetryInterval, "retry-interval", cfg.RetryInterval, "delay between API retries")
 	fs.StringVar(&cfg.LockPath, "lock-path", "", "single-instance lock file path (default: VISIONMCP_LOCK_PATH or user cache)")
+	fs.BoolVar(&cfg.HTTP, "http", false, "run as an HTTP (Streamable HTTP) MCP server instead of stdio")
+	fs.StringVar(&cfg.HTTPAddr, "http-addr", cfg.HTTPAddr, "listen address for --http mode (default: 127.0.0.1:8765)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -95,6 +103,9 @@ func (c Config) Validate() error {
 	}
 	if c.RetryInterval <= 0 {
 		return errors.New("retry interval must be positive")
+	}
+	if c.HTTP && strings.TrimSpace(c.HTTPAddr) == "" {
+		return errors.New("http addr must not be empty in --http mode")
 	}
 
 	switch c.LogLevel {

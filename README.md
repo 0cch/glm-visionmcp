@@ -1,6 +1,6 @@
 # visionmcp
 
-Vision MCP is a Go stdio Model Context Protocol server that gives non-multimodal Codex models image understanding through an OpenAI-compatible vision model. It ships configured for GLM-4.6V-Flash but works with any provider that implements the OpenAI Chat Completions protocol (OpenAI, Azure OpenAI, OpenRouter, DeepSeek, Moonshot, local vLLM/Ollama servers, etc.).
+Vision MCP is a Go stdio or HTTP Model Context Protocol server that gives non-multimodal Codex models image understanding through an OpenAI-compatible vision model. It ships configured for GLM-4.6V-Flash but works with any provider that implements the OpenAI Chat Completions protocol (OpenAI, Azure OpenAI, OpenRouter, DeepSeek, Moonshot, local vLLM/Ollama servers, etc.).
 
 ## Build
 
@@ -11,7 +11,13 @@ go test ./...
 
 ## Run
 
-The server communicates over stdin/stdout and exposes one tool:
+The server runs in stdio mode by default. Use --http to run as an HTTP MCP server (Streamable HTTP) on a local port instead, so every agent shares one long-running instance:
+
+```powershell
+.\visionmcp.exe --http --http-addr 127.0.0.1:8765
+```
+
+In both modes it exposes one tool:
 
 - `analyze_image(prompt, image)` — analyzes exactly one image and returns text.
 
@@ -37,6 +43,8 @@ $env:OPENAI_BASE_URL = "https://api.openai.com/v1"
 - `--api-endpoint` — deprecated. Sets the full Chat Completions URL directly; kept for backwards compatibility. Prefer `--base-url`.
 - `--api-key` / `OPENAI_API_KEY` / `GLM_API_KEY` — API key. `OPENAI_API_KEY` takes precedence, then `GLM_API_KEY`, then `--api-key` (the flag wins over env).
 - `--model` — model name, e.g. `glm-4.6v-flash`, `gpt-4o`, `qwen-vl-max`. Defaults to `glm-4.6v-flash`.
+- `--http` — run as an HTTP (Streamable HTTP) MCP server instead of stdio. Codex connects to `http://<http-addr>/mcp`. Single-instance locking still applies, so only one shared instance runs per user.
+- `--http-addr` — listen address for `--http` mode. Defaults to `127.0.0.1:8765`. Use `0.0.0.0:8765` to accept LAN connections.
 
 The request is a standard OpenAI Chat Completions call: `Authorization: Bearer <key>` with a `user` message containing an `image_url` (data URL) and `text` part.
 
@@ -57,6 +65,19 @@ env_vars = ["OPENAI_API_KEY", "GLM_API_KEY"]
 ```
 
 For a non-default provider, set `OPENAI_BASE_URL` (or pass `--base-url`); the generated config will include `--base-url` in `args`.
+
+For HTTP mode, generate a shared-instance config with `--http`:
+
+```powershell
+.\visionmcp.exe --http --dry-run
+```
+
+```toml
+[mcp_servers.visionmcp]
+url = "http://127.0.0.1:8765/mcp"
+```
+
+Start the shared server once (e.g. as a background process), then every Codex session uses that single instance. Run `visionmcp --http --dry-run --http-addr 0.0.0.0:8765` to advertise a LAN-reachable address.
 
 ## Logging
 

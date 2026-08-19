@@ -20,12 +20,24 @@ type CodexConfigOptions struct {
 	Retries       int
 	RetryInterval time.Duration
 	LockPath      string
+	HTTP          bool
+	HTTPURL       string
 }
 
+// GenerateCodexConfig renders a [mcp_servers.*] snippet for Codex. In stdio
+// mode it emits command + args; in HTTP mode it emits url so that every Codex
+// session shares the single running instance.
 func GenerateCodexConfig(options CodexConfigOptions) string {
 	name := options.ServerName
 	if name == "" {
 		name = "visionmcp"
+	}
+	if options.HTTP {
+		url := options.HTTPURL
+		if url == "" {
+			url = "http://127.0.0.1:8765/mcp"
+		}
+		return fmt.Sprintf("[mcp_servers.%s]\nurl = %q\n", name, url)
 	}
 	executable := options.Executable
 	if executable == "" {
@@ -87,6 +99,13 @@ func GenerateCodexCLICommand(options CodexConfigOptions) string {
 	parts := []string{"codex mcp add", options.ServerName, "--env OPENAI_API_KEY --env GLM_API_KEY --"}
 	if options.ServerName == "" {
 		parts[1] = "visionmcp"
+	}
+	if options.HTTP {
+		url := options.HTTPURL
+		if url == "" {
+			url = "http://127.0.0.1:8765/mcp"
+		}
+		return "codex mcp add " + options.ServerName + " --url " + url
 	}
 	parts = append(parts, options.Executable)
 	if options.BaseURL != "" {

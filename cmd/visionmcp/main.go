@@ -89,6 +89,15 @@ func main() {
 		Logger:  logger,
 		Timeout: cfg.Timeout,
 	}
+	if cfg.HTTP {
+		logger.Infof("serving MCP over HTTP at %s%s", cfg.HTTPAddr, mcp.HTTPMCPPath)
+		if err := (mcp.HTTPServer{Server: server}).Serve(ctx, cfg.HTTPAddr); err != nil {
+			logger.ErrorFields("http server stopped", map[string]any{"error": err.Error()})
+			os.Exit(1)
+		}
+		logger.Infof("server stopped")
+		return
+	}
 	if err := server.Serve(ctx, os.Stdin, os.Stdout); err != nil {
 		logger.ErrorFields("server stopped", map[string]any{"error": err.Error()})
 		os.Exit(1)
@@ -97,6 +106,13 @@ func main() {
 }
 
 func generateConfig(cfg config.Config) string {
+	if cfg.HTTP {
+		return mcp.GenerateCodexConfig(mcp.CodexConfigOptions{
+			ServerName: "visionmcp",
+			HTTP:       true,
+			HTTPURL:    "http://" + cfg.HTTPAddr + mcp.HTTPMCPPath,
+		})
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		executable = filepath.Join("path", "to", "visionmcp.exe")

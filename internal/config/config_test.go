@@ -202,3 +202,30 @@ func TestParseLockPathFlag(t *testing.T) {
 		t.Fatalf("expected empty LockPath, got %q", cfg.LockPath)
 	}
 }
+
+func TestParseHTTPDefaults(t *testing.T) {
+	cfg, err := Parse(nil, keyEnv())
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.HTTP || cfg.HTTPAddr != DefaultHTTPAddr {
+		t.Fatalf("unexpected http defaults: HTTP=%v HTTPAddr=%q", cfg.HTTP, cfg.HTTPAddr)
+	}
+}
+
+func TestParseHTTPFlag(t *testing.T) {
+	cfg, err := Parse([]string{"--http", "--http-addr", "0.0.0.0:9000"}, keyEnv())
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !cfg.HTTP || cfg.HTTPAddr != "0.0.0.0:9000" {
+		t.Fatalf("unexpected http config: %+v", cfg)
+	}
+}
+
+func TestValidateHTTPAddr(t *testing.T) {
+	base := Config{APIKey: "key", APIEndpoint: DefaultAPIEndpoint, Model: DefaultModel, Timeout: time.Second, MaxImageMB: 1, LogLevel: "info", Retries: 1, RetryInterval: time.Second, HTTP: true, HTTPAddr: ""}
+	if err := base.Validate(); err == nil || err.Error() != "http addr must not be empty in --http mode" {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
